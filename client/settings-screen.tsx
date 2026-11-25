@@ -11,11 +11,10 @@ import {
 import { Text } from "react-native";
 import { managedAgentsSettings } from "../shared/settings";
 
-
-
 export function ManagedAgentsSettingsScreen() {
   const settings = useSettings(managedAgentsSettings);
   const keyInput = useRef<SettingsInputHandle>(null);
+  const githubInput = useRef<SettingsInputHandle>(null);
   const budgetInput = useRef<SettingsInputHandle>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -27,6 +26,7 @@ export function ManagedAgentsSettingsScreen() {
 
   async function save() {
     const key = keyInput.current?.getText().trim() ?? values.apiKey;
+    const githubToken = githubInput.current?.getText().trim() ?? values.githubToken;
     const budgetText = budgetInput.current?.getText().trim() ?? String(values.sessionBudgetUsd);
     const budget = Number(budgetText);
     if (!Number.isFinite(budget) || budget <= 0) {
@@ -34,7 +34,7 @@ export function ManagedAgentsSettingsScreen() {
       return;
     }
     setError(null);
-    await settings.save({ ...values, apiKey: key, sessionBudgetUsd: budget }, revision);
+    await settings.save({ ...values, apiKey: key, githubToken, sessionBudgetUsd: budget }, revision);
   }
 
   return (
@@ -50,6 +50,19 @@ export function ManagedAgentsSettingsScreen() {
           }
           placeholder="sk-ant-…"
           initialValue={values.apiKey}
+          secureTextEntry
+          onChangeText={() => {}}
+        />
+        <SettingsInput
+          ref={githubInput}
+          label="GitHub token (optional)"
+          hint={
+            values.githubToken
+              ? "Saved. Cloud agents can push branches and open PRs."
+              : "Lets cloud agents push branches and open PRs. Use a fine-grained token limited to the repositories you want. Kept in an Anthropic vault; the sandbox never sees it."
+          }
+          placeholder="github_pat_…"
+          initialValue={values.githubToken}
           secureTextEntry
           onChangeText={() => {}}
         />

@@ -11,6 +11,7 @@ import {
 } from "@getpaseo/plugin/server/provider";
 import type { PluginSettings } from "@getpaseo/plugin/server";
 import { SETTINGS_SCREEN_ID, type managedAgentsSettings } from "../shared/settings.js";
+import { GITHUB_MCP_SERVER, GITHUB_SYSTEM, ensureGitHubVault } from "./github.js";
 import { readState, writeState } from "./state.js";
 
 type PluginSettingsHandle = PluginSettings<(typeof managedAgentsSettings)["schema"]>;
@@ -184,17 +185,20 @@ async function openSession(
 
   let managedSessionId = persistedSessionId(input.persistence);
   if (!managedSessionId) {
-    const { agentId, environmentId, budgetUsd } = await ensureResources(client, deps.settings);
+    const { agentId, environmentId, budgetUsd, vaultId } = await ensureResources(client, deps.settings);
     const repo = await readRepo(config.cwd);
+    const github = vaultId !== null;
     managedSessionId = (
       await client.beta.sessions.create({
         agent: {
           type: "agent_with_overrides",
           id: agentId,
           model,
-          system: [AGENT_SYSTEM, config.systemPrompt].filter(Boolean).join("\n\n"),
-          tools: sessionTools(mode, bridge.tools),
+          system: [AGENT_SYSTEM, github ? GITHUB_SYSTEM : null, config.systemPrompt].filter(Boolean).join("\n\n"),
+          tools: sessionTools(mode, bridge.tools, github),
+          ...(github ? { mcp_servers: [GITHUB_MCP_SERVER] } : {}),
         },
+        ...(github ? { vault_ids: [vaultId] } : {}),
         environment_id: environmentId,
         title: config.title ?? `Paseo: ${repo.url.split("/").slice(-1)[0]}@${repo.branch}`,
         budget: { type: "limit", max_list_cost: { amount: String(Math.round(budgetUsd * 100)), currency: "USD" } },
@@ -232,8 +236,12 @@ async function openSession(
   return session;
 }
 
-function sessionTools(mode: string, bridged: BridgedTool[]) {
+export function sessionTools(mode: string, bridged: BridgedTool[], github = false) {
+  const policy = { type: mode === "ask" ? ("always_ask" as const) : ("auto" as const) };
   return [
+    ...(github
+      ? [{ type: "mcp_toolset" as const, mcp_server_name: GITHUB_MCP_SERVER.name, default_config: { enabled: true, permission_policy: policy } }]
+      : []),
     {
       type: "agent_toolset_20260401" as const,
       default_config: {
@@ -260,20 +268,29 @@ function sessionTools(mode: string, bridged: BridgedTool[]) {
   ];
 }
 
-/** Creates the agent and environment on first use and remembers their IDs. */
+/**
+ * Creates the agent and environment on first use and remembers their IDs. With a GitHub token set,
+ * also keeps the token in the plugin's vault and lets the environment reach MCP servers.
+ */
 async function ensureResources(client: Anthropic, settings: PluginSettingsHandle) {
   const current = await settings.read();
   const budgetUsd = current.status === "ready" ? current.values.sessionBudgetUsd : 2;
-  const state = await readState();
+  const githubToken = current.status === "ready" ? current.values.githubToken.trim() : "";
+  const initial = await readState();
+  let state = initial;
   let { agentId, environmentId } = state;
+  const networking = { type: "limited" as const, allow_package_managers: true, allow_mcp_servers: true };
   if (!environmentId) {
     environmentId = (
-      await client.beta.environments.create({
-        name: "paseo-claude-cloud",
-        config: { type: "cloud", networking: { type: "limited", allow_package_managers: true, allow_mcp_servers: false } },
-      })
+      await client.beta.environments.create({ name: "paseo-claude-cloud", config: { type: "cloud", networking } })
     ).id;
+    state = { ...state, environmentAllowsMcp: true };
+  } else if (githubToken && !state.environmentAllowsMcp) {
+    // Environments created before GitHub support blocked MCP traffic.
+    await client.beta.environments.update(environmentId, { config: { type: "cloud", networking } });
+    state = { ...state, environmentAllowsMcp: true };
   }
+  if (githubToken) state = await ensureGitHubVault(client, githubToken, state);
   if (!agentId) {
     agentId = (
       await client.beta.agents.create({
@@ -283,10 +300,9 @@ async function ensureResources(client: Anthropic, settings: PluginSettingsHandle
       })
     ).id;
   }
-  if (agentId !== state.agentId || environmentId !== state.environmentId) {
-    await writeState({ agentId, environmentId });
-  }
-  return { agentId, environmentId, budgetUsd };
+  state = { ...state, agentId, environmentId };
+  if (JSON.stringify(state) !== JSON.stringify(initial)) await writeState(state);
+  return { agentId, environmentId, budgetUsd, vaultId: githubToken ? state.vaultId : null };
 }
 
 function configState(model: string, mode: string): ProviderConfigState {

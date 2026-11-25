@@ -12,6 +12,11 @@ export const managedAgentsSettings = defineSettings({
   schema: z.object({
     /** Anthropic API key. Empty means: use ANTHROPIC_API_KEY from the daemon environment. */
     apiKey: z.string().default(""),
+    /**
+     * GitHub token for pushing and opening PRs from the cloud. Kept in a Managed Agents vault and
+     * used only for GitHub's MCP server; empty means the agent hands changes back as a patch only.
+     */
+    githubToken: z.string().default(""),
     /** Hard spend cap per session, in USD, enforced by the Managed Agents API. */
     sessionBudgetUsd: z.number().positive().default(2),
   }),
