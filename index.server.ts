@@ -1,5 +1,5 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
-import { createManagedAgentsProvider } from "./server/provider";
+import { createManagedAgentsProvider } from "./server/dist/provider.mjs";
 import { managedAgentsSettings } from "./shared/settings";
 
 export default function contribute(server: PluginServerContext) {

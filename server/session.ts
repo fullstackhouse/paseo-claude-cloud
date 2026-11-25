@@ -254,7 +254,7 @@ export class ManagedSession {
             inputTokens: event.usage.input_tokens,
             cachedInputTokens: event.usage.cache_read_input_tokens,
             outputTokens: event.usage.output_tokens,
-            totalCostUsd: event.usage.list_cost ? Number(event.usage.list_cost.amount) : undefined,
+            totalCostUsd: event.usage.list_cost ? Number(event.usage.list_cost.amount) / 100 : undefined, // minor units
           },
         });
         return;

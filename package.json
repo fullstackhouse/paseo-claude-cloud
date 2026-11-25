@@ -8,11 +8,13 @@
     "index.server.ts",
     "server/",
     "shared/",
-    "icon.svg"
+    "icon.svg",
+    "server/dist/"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "bundle": "esbuild server/provider.ts --bundle --platform=node --format=esm --target=node20 --outfile=server/dist/provider.mjs --external:@getpaseo/plugin --external:@getpaseo/plugin/* --external:zod --banner:js=\"import { createRequire as __paseoCreateRequire } from \\\"node:module\\\"; const require = __paseoCreateRequire(process.execPath);\""
   },
   "devDependencies": {
     "@getpaseo/plugin": "0.15.3",
@@ -23,6 +25,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.12.0",
-    "@modelcontextprotocol/sdk": "^1.32.2"
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "esbuild": "^0.25.12"
   }
 }

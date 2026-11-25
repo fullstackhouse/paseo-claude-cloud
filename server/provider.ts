@@ -148,7 +148,7 @@ async function openSession(
   const apiKey = config.env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("Set ANTHROPIC_API_KEY in the daemon environment to use Claude (cloud).");
   const client = new Anthropic({ apiKey });
-  const bridge = await createMcpBridge(config.mcpServers, deps.log);
+  const bridge = await createMcpBridge(config.mcpServers, { cwd: config.cwd, env: config.env }, deps.log);
   const model = config.model ?? DEFAULT_MODEL;
   const mode = config.mode ?? DEFAULT_MODE;
 
@@ -167,7 +167,7 @@ async function openSession(
         },
         environment_id: environmentId,
         title: config.title ?? `Paseo: ${repo.url.split("/").slice(-1)[0]}@${repo.branch}`,
-        budget: { type: "limit", max_list_cost: { amount: budgetUsd.toFixed(2), currency: "USD" } },
+        budget: { type: "limit", max_list_cost: { amount: String(Math.round(budgetUsd * 100)), currency: "USD" } },
         resources: [
           {
             type: "github_repository",

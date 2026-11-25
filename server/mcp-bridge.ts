@@ -30,6 +30,7 @@ export interface McpBridge {
 
 export async function createMcpBridge(
   servers: Readonly<Record<string, ProviderMcpServerConfig>>,
+  session: { cwd: string; env: Readonly<Record<string, string>> },
   log: (message: string) => void,
 ): Promise<McpBridge> {
   const clients = new Map<string, Client>();
@@ -44,7 +45,10 @@ export async function createMcpBridge(
           ? new StdioClientTransport({
               command: config.command,
               args: config.args ?? [],
-              env: { ...(process.env as Record<string, string>), ...config.env },
+              // Stdio tool servers identify the calling agent from the agent's own environment
+              // (PASEO_AGENT_ID) and working directory, as if the agent had spawned them.
+              cwd: session.cwd,
+              env: { ...(process.env as Record<string, string>), ...session.env, ...config.env },
             })
           : new StreamableHTTPClientTransport(new URL(config.url), {
               requestInit: { headers: config.headers ?? {} },
