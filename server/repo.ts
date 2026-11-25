@@ -6,21 +6,28 @@ const run = promisify(execFile);
 export interface RepoInfo {
   url: string;
   branch: string;
+  /** The sandbox clones this exact commit, so the patch it hands back applies to the local worktree. */
+  sha: string;
 }
 
-/** The workspace's GitHub remote and branch, cloned into the cloud sandbox at session start. */
+/**
+ * The workspace's GitHub remote and current commit. The branch itself need not be on GitHub:
+ * a fresh workspace branch off main has no commits of its own, so its HEAD is already there.
+ */
 export async function readRepo(cwd: string): Promise<RepoInfo> {
   const remote = (await git(cwd, ["remote", "get-url", "origin"])).trim();
   const match = remote.match(/github\.com[:/](.+?)(?:\.git)?$/);
   if (!match) throw new Error(`The workspace remote is not a GitHub repository: ${remote}`);
   const branch = (await git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
-  const upstream = await git(cwd, ["ls-remote", "--heads", "origin", branch]).catch(() => "");
-  if (!upstream.trim()) {
+  const sha = (await git(cwd, ["rev-parse", "HEAD"])).trim();
+  await git(cwd, ["fetch", "--quiet", "origin"]).catch(() => "");
+  const containing = (await git(cwd, ["branch", "-r", "--contains", sha]).catch(() => "")).trim();
+  if (!containing) {
     throw new Error(
-      `Branch "${branch}" is not on GitHub yet. Push it first: the cloud agent clones from GitHub.`,
+      `Commit ${sha.slice(0, 9)} on "${branch}" is not on GitHub yet. Push it first: the cloud agent clones from GitHub.`,
     );
   }
-  return { url: `https://github.com/${match[1]}`, branch };
+  return { url: `https://github.com/${match[1]}`, branch, sha };
 }
 
 /** Token used only for the clone. Anthropic keeps it outside the sandbox. */

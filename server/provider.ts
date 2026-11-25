@@ -204,7 +204,7 @@ async function openSession(
             url: repo.url,
             mount_path: REPO_MOUNT,
             authorization_token: await readGitHubToken(config.env),
-            checkout: { type: "branch", name: repo.branch },
+            checkout: { type: "commit", sha: repo.sha },
           },
         ],
         metadata: { paseo_session_id: input.sessionId },
