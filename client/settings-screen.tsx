@@ -55,11 +55,11 @@ export function ManagedAgentsSettingsScreen() {
         />
         <SettingsInput
           ref={githubInput}
-          label="GitHub token (optional)"
+          label="GitHub token for PRs (optional)"
           hint={
             values.githubToken
-              ? "Saved. Cloud agents can push branches and open PRs."
-              : "Lets cloud agents push branches and open PRs. Use a fine-grained token limited to the repositories you want. Kept in an Anthropic vault; the sandbox never sees it."
+              ? "Saved. Cloud agents open PRs with this token."
+              : "Empty: cloud agents open PRs with your gh login. Paste a fine-grained token to limit them to certain repositories. Kept in an Anthropic vault; the sandbox never sees it."
           }
           placeholder="github_pat_…"
           initialValue={values.githubToken}

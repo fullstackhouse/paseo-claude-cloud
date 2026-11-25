@@ -40,9 +40,12 @@ const DEFAULT_MODEL = "claude-opus-5-5";
 const DEFAULT_MODE = "auto";
 
 const AGENT_SYSTEM = `You work in a cloud sandbox on a clone of the user's repository at ${REPO_MOUNT}.
-You cannot push to GitHub. To hand your changes back, write the full diff of the working tree against the
-starting commit (\`git -C ${REPO_MOUNT} add -A && git -C ${REPO_MOUNT} diff --cached HEAD\`) to
-/mnt/session/outputs/${PATCH_FILE}, then call the ${SYNC_TOOL} tool. Do this whenever you finish a change.`;
+\`git push\` to that repository works: an Anthropic-side git proxy authenticates it. Push to a new branch,
+never to the default branch, unless told otherwise.
+Whenever you finish a change, also hand it back for local review: write the full diff of the working tree
+against the starting commit (\`git -C ${REPO_MOUNT} diff HEAD\` after committing, or
+\`git -C ${REPO_MOUNT} add -A && git -C ${REPO_MOUNT} diff --cached HEAD\` before) to
+/mnt/session/outputs/${PATCH_FILE}, then call the ${SYNC_TOOL} tool.`;
 
 const MISSING_KEY =
   "Needs an Anthropic API key: Settings → Providers → Claude (cloud) → Configure, or ANTHROPIC_API_KEY in the daemon environment.";
@@ -185,7 +188,7 @@ async function openSession(
 
   let managedSessionId = persistedSessionId(input.persistence);
   if (!managedSessionId) {
-    const { agentId, environmentId, budgetUsd, vaultId } = await ensureResources(client, deps.settings);
+    const { agentId, environmentId, budgetUsd, vaultId } = await ensureResources(client, deps.settings, config.env);
     const repo = await readRepo(config.cwd);
     const github = vaultId !== null;
     managedSessionId = (
@@ -269,13 +272,19 @@ export function sessionTools(mode: string, bridged: BridgedTool[], github = fals
 }
 
 /**
- * Creates the agent and environment on first use and remembers their IDs. With a GitHub token set,
- * also keeps the token in the plugin's vault and lets the environment reach MCP servers.
+ * Creates the agent and environment on first use and remembers their IDs. Also keeps a GitHub token
+ * in the plugin's vault for opening PRs and lets the environment reach MCP servers: the settings
+ * token when set, otherwise the local gh login (the token already used for the clone).
  */
-async function ensureResources(client: Anthropic, settings: PluginSettingsHandle) {
+async function ensureResources(
+  client: Anthropic,
+  settings: PluginSettingsHandle,
+  env: Readonly<Record<string, string>>,
+) {
   const current = await settings.read();
   const budgetUsd = current.status === "ready" ? current.values.sessionBudgetUsd : 2;
-  const githubToken = current.status === "ready" ? current.values.githubToken.trim() : "";
+  const fromSettings = current.status === "ready" ? current.values.githubToken.trim() : "";
+  const githubToken = fromSettings || (await readGitHubToken(env).catch(() => ""));
   const initial = await readState();
   let state = initial;
   let { agentId, environmentId } = state;

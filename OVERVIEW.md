@@ -9,10 +9,10 @@ Adds a **Claude (cloud)** provider. Each agent runs in an Anthropic-hosted sandb
   dollar cap (default $2). When an agent reaches it, Paseo offers to raise the cap for that session.
 - **Repository:** the workspace must be a GitHub repository whose current commit is on GitHub. The
   sandbox clones that commit with your `gh` token (or `MANAGED_AGENTS_GITHUB_TOKEN`).
-- **Pushing and PRs (optional):** add a GitHub token on the same settings page, ideally a
-  fine-grained token limited to the repositories you want. It's kept in an Anthropic vault and used
-  only for GitHub's MCP server, and the sandbox never sees it. With it, cloud agents push branches
-  and open PRs themselves; `git push` itself can't work there.
+- **Pushing and PRs:** agents push with plain `git push`, which Anthropic's git proxy authenticates
+  with the clone token. They open PRs through GitHub's MCP server, using your `gh` login stored in an
+  Anthropic vault; the sandbox never sees it. To limit which repositories they can touch, paste a
+  fine-grained token in the **GitHub token** field on the settings page.
 - **Local copy:** the agent also writes `changes.patch` and calls `sync_changes_to_local`; the daemon
   applies it to your worktree, so Paseo's diff view shows the change.
 - **Host tools:** your Paseo MCP servers (asks, status, PRs, …) are offered to the cloud agent as
