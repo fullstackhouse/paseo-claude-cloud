@@ -34,6 +34,8 @@ export class ManagedSession {
   private readonly localPermissions = new Map<string, (response: ProviderPermissionResponse) => void>();
   private activeTurnId: string | null = null;
   private turnCounter = 0;
+  /** Latest list cost reported by the session, in cents. */
+  private spentCents = 0;
   private interruptRequested = false;
   private appliedPatch: string | null = null;
   private stopped = false;
@@ -93,14 +95,16 @@ export class ManagedSession {
       sessionId: this.paseoSessionId,
       item: { type: "user_message", id: `user:${turnId}`, text, clientMessageId: prompt.clientMessageId },
     });
+    // Claim the turn before sending: the session.status_running this triggers is not a resume.
+    this.activeTurnId = turnId;
+    this.interruptRequested = false;
     try {
       await this.send([{ type: "user.message", content: [{ type: "text", text }] }]);
     } catch (error) {
+      this.activeTurnId = null;
       this.promptFailed(prompt, errorMessage(error));
       return;
     }
-    this.activeTurnId = turnId;
-    this.interruptRequested = false;
     this.emit({
       type: "session.prompt_result",
       sessionId: this.paseoSessionId,
@@ -260,6 +264,7 @@ export class ManagedSession {
         );
         return;
       case "session.usage":
+        if (event.usage.list_cost) this.spentCents = Number(event.usage.list_cost.amount);
         this.emit({
           type: "session.usage",
           sessionId: this.paseoSessionId,
@@ -271,8 +276,16 @@ export class ManagedSession {
           },
         });
         return;
+      case "session.status_running":
+        // Work Paseo did not start: a budget raise or a queued message resumed the session.
+        if (!this.activeTurnId) {
+          const turnId = `resume-${++this.turnCounter}-${Date.now()}`;
+          this.activeTurnId = turnId;
+          this.emit({ type: "session.turn", sessionId: this.paseoSessionId, turnId, state: "started" });
+        }
+        return;
       case "session.status_idle":
-        this.onIdle(event.stop_reason);
+        this.onIdle(event.stop_reason, event.id);
         return;
       case "session.status_terminated":
         this.finishTurn("failed", "The cloud session ended");
@@ -284,7 +297,10 @@ export class ManagedSession {
     }
   }
 
-  private onIdle(stopReason: Anthropic.Beta.Sessions.BetaManagedAgentsSessionStatusIdleEvent["stop_reason"]): void {
+  private onIdle(
+    stopReason: Anthropic.Beta.Sessions.BetaManagedAgentsSessionStatusIdleEvent["stop_reason"],
+    eventId: string,
+  ): void {
     switch (stopReason.type) {
       case "requires_action":
         return; // waiting on a permission or a custom tool result
@@ -296,17 +312,66 @@ export class ManagedSession {
           type: "session.notice",
           sessionId: this.paseoSessionId,
           notice: {
-            id: `budget-${Date.now()}`,
+            id: `budget-${eventId}`,
             severity: "warning",
             title: "Session budget reached",
-            description: "The cloud agent paused at its spend cap. Raise the cap in the plugin settings for new sessions.",
+            description: `The cloud agent paused after spending ${formatUsd(this.spentCents)}. Raise its cap to let it continue.`,
           },
         });
         this.finishTurn("failed", "Session budget reached");
+        this.offerBudgetRaise(eventId);
         return;
       default:
         this.finishTurn("failed", `The agent stopped: ${stopReason.type}`);
     }
+  }
+
+  /**
+   * Asks the user, through Paseo's permission card, how far to raise this session's cap. Raising it
+   * resumes the paused session; status_running then opens a new turn.
+   */
+  private offerBudgetRaise(eventId: string): void {
+    const id = `budget:${eventId}`;
+    const caps = BUDGET_RAISE_STEPS_USD.map((usd) => usd * 100).filter((cents) => cents > this.spentCents + 50);
+    this.localPermissions.set(id, (response) => {
+      if (response.behavior !== "allow") return;
+      // A plain allow (no action picked, e.g. `paseo permit allow`) takes the first, smallest cap.
+      const cents = response.selectedActionId?.startsWith("raise:")
+        ? Number(response.selectedActionId.slice("raise:".length))
+        : caps[0];
+      if (cents === undefined || !Number.isFinite(cents)) return;
+      void this.client.beta.sessions
+        .update(this.managedSessionId, {
+          budget: { type: "limit", max_list_cost: { amount: String(cents), currency: "USD" } },
+        })
+        .catch((error) => {
+          this.emitItem({
+            type: "error",
+            id: `budget-raise:${eventId}`,
+            message: `Raising the cap failed: ${errorMessage(error)}`,
+          });
+        });
+    });
+    this.emit({
+      type: "session.permission",
+      sessionId: this.paseoSessionId,
+      request: {
+        id,
+        name: "Raise spend cap",
+        kind: "other",
+        title: `The cloud agent reached its spend cap (${formatUsd(this.spentCents)} spent)`,
+        description: "Raise the cap for this session to let it continue, or leave it paused.",
+        actions: [
+          ...caps.map((cents, index) => ({
+            id: `raise:${cents}`,
+            label: `Raise to ${formatUsd(cents)}`,
+            behavior: "allow" as const,
+            variant: index === 0 ? ("primary" as const) : ("secondary" as const),
+          })),
+          { id: "keep-paused", label: "Leave paused", behavior: "deny" as const },
+        ],
+      },
+    });
   }
 
   private finishTurn(state: "completed" | "failed" | "canceled", message?: string): void {
@@ -469,6 +534,12 @@ function toolDetail(name: string, input: Record<string, unknown>, output: string
     default:
       return { type: "unknown", input: input as never, output: output };
   }
+}
+
+const BUDGET_RAISE_STEPS_USD = [5, 10, 20, 50];
+
+function formatUsd(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
 }
 
 function textOf(content: ReadonlyArray<{ type: string; text?: string }>): string {

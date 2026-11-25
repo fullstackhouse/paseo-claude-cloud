@@ -11,11 +11,16 @@ import { ManagedSession } from "./session.js";
 /** A stand-in for the Managed Agents API: a scripted event stream plus a log of sent events. */
 function fakeClient(script: Array<Record<string, unknown>>) {
   const sent: Array<Record<string, unknown>> = [];
+  const updates: Array<Record<string, unknown>> = [];
   let release: () => void = () => {};
   const done = new Promise<void>((resolve) => (release = resolve));
   const client = {
     beta: {
       sessions: {
+        async update(_id: string, body: Record<string, unknown>) {
+          updates.push(body);
+          return {};
+        },
         events: {
           async *list() {},
           async stream() {
@@ -32,7 +37,7 @@ function fakeClient(script: Array<Record<string, unknown>>) {
       },
     },
   } as unknown as Anthropic;
-  return { client, sent, done };
+  return { client, sent, updates, done };
 }
 
 function fakeBridge(calls: Array<{ name: string; input: unknown }>): McpBridge {
@@ -59,7 +64,7 @@ interface RunOptions {
 async function run(script: Array<Record<string, unknown>>, options: RunOptions = {}) {
   const events: ProviderEvent[] = [];
   const bridgeCalls: Array<{ name: string; input: unknown }> = [];
-  const { client, sent, done } = fakeClient(script);
+  const { client, sent, updates, done } = fakeClient(script);
   const session = new ManagedSession(
     client,
     "paseo-1",
@@ -84,7 +89,7 @@ async function run(script: Array<Record<string, unknown>>, options: RunOptions =
   await done;
   await new Promise((resolve) => setTimeout(resolve, 10));
   await session.stop();
-  return { events, sent, bridgeCalls };
+  return { events, sent, updates, bridgeCalls };
 }
 
 const items = (events: ProviderEvent[]) =>
@@ -168,11 +173,65 @@ describe("ManagedSession", () => {
     });
   });
 
-  it("fails the turn and warns when the budget is reached", async () => {
-    const { events } = await run([{ type: "session.status_idle", id: "e1", stop_reason: { type: "budget_reached" } }]);
+  it("fails the turn at the budget cap and offers caps above what was spent", async () => {
+    const { events, updates } = await run([
+      { type: "session.usage", id: "u1", usage: { list_cost: { amount: "612", currency: "USD" } } },
+      { type: "session.status_idle", id: "e1", stop_reason: { type: "budget_reached" } },
+    ]);
     expect(events.find((event) => event.type === "session.notice")).toMatchObject({
       notice: { title: "Session budget reached" },
     });
     expect(events.filter((event) => event.type === "session.turn").at(-1)).toMatchObject({ state: "failed" });
+    const permission = events.find((event) => event.type === "session.permission");
+    expect(permission).toMatchObject({ request: { id: "budget:e1", kind: "other" } });
+    const actions = permission?.type === "session.permission" ? permission.request.actions : [];
+    expect(actions?.map((action) => action.label)).toEqual(["Raise to $10.00", "Raise to $20.00", "Raise to $50.00", "Leave paused"]);
+    expect(updates).toEqual([]);
+  });
+
+  it("raises the session's cap through the API when the user picks a cap", async () => {
+    const { updates } = await run([{ type: "session.status_idle", id: "e1", stop_reason: { type: "budget_reached" } }], {
+      answer: (id) => (id === "budget:e1" ? { behavior: "allow", selectedActionId: "raise:1000" } : { behavior: "deny" }),
+    });
+    expect(updates).toEqual([{ budget: { type: "limit", max_list_cost: { amount: "1000", currency: "USD" } } }]);
+  });
+
+  it("takes the first cap on a plain allow with no action picked", async () => {
+    const { updates } = await run([{ type: "session.status_idle", id: "e1", stop_reason: { type: "budget_reached" } }], {
+      answer: () => ({ behavior: "allow" }),
+    });
+    expect(updates).toEqual([{ budget: { type: "limit", max_list_cost: { amount: "500", currency: "USD" } } }]);
+  });
+
+  it("leaves the session paused when the user declines", async () => {
+    const { updates } = await run([{ type: "session.status_idle", id: "e1", stop_reason: { type: "budget_reached" } }], {
+      answer: () => ({ behavior: "deny", selectedActionId: "keep-paused" }),
+    });
+    expect(updates).toEqual([]);
+  });
+
+  it("opens a new turn when a paused session resumes, and completes it", async () => {
+    const { events } = await run([
+      { type: "session.status_idle", id: "e1", stop_reason: { type: "budget_reached" } },
+      { type: "session.status_running", id: "e2" },
+      { type: "agent.message", id: "m1", content: [{ type: "text", text: "Continuing" }] },
+      { type: "session.status_idle", id: "e3", stop_reason: { type: "end_turn" } },
+    ]);
+    const turns = events.flatMap((event) => (event.type === "session.turn" ? [[event.turnId.split("-")[0], event.state]] : []));
+    expect(turns).toEqual([
+      ["turn", "started"],
+      ["turn", "failed"],
+      ["resume", "started"],
+      ["resume", "completed"],
+    ]);
+  });
+
+  it("does not mistake its own prompt's status_running for a resume", async () => {
+    const { events } = await run([
+      { type: "session.status_running", id: "e1" },
+      { type: "session.status_idle", id: "e2", stop_reason: { type: "end_turn" } },
+    ]);
+    const turns = events.filter((event) => event.type === "session.turn").map((event) => event.state);
+    expect(turns).toEqual(["started", "completed"]);
   });
 });
