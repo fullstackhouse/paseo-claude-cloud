@@ -221,22 +221,29 @@ async function openSession(
 
   const session = new ManagedSession(client, input.sessionId, managedSessionId, config, bridge, emit, deps.log);
   const persistence: ProviderPersistence = { version: 1, data: { managedSessionId } };
-  emit({
-    type: "session.opened",
+  // externalSession is newer than the published SDK types; older hosts strip it.
+  const opened = {
+    type: "session.opened" as const,
     requestId: input.requestId,
     sessionId: input.sessionId,
     capabilities: CAPABILITIES,
-    restoration: "core",
+    restoration: "core" as const,
     persistence,
     title: config.title,
     cwd: config.cwd,
-  });
+    externalSession: { id: managedSessionId, url: consoleSessionUrl(managedSessionId) },
+  };
+  emit(opened);
   emit({ type: "session.config", sessionId: input.sessionId, config: configState(model, mode) });
   if (input.persistence && input.history === "replay") await session.replay();
   else await session.skipHistory();
   session.startStreaming();
   emit({ type: "session.ready", requestId: input.requestId, sessionId: input.sessionId });
   return session;
+}
+
+export function consoleSessionUrl(managedSessionId: string): string {
+  return `https://platform.claude.com/workspaces/default/sessions/${encodeURIComponent(managedSessionId)}`;
 }
 
 export function sessionTools(mode: string, bridged: BridgedTool[], github = false) {
