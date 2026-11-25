@@ -7,7 +7,7 @@ export default function contribute(server: PluginServerContext) {
   server.registerProvider(
     createManagedAgentsProvider({
       settings,
-      log: (message) => console.error(`[managed-agents] ${message}`),
+      log: (message) => console.error(`[claude-cloud] ${message}`),
     }),
   );
   return () => {};

@@ -1,6 +1,6 @@
 {
-  "id": "paseo-managed-agents",
-  "name": "Claude Managed Agents",
+  "id": "paseo-claude-cloud",
+  "name": "Claude (cloud)",
   "description": "Run Claude agents in Anthropic's cloud sandboxes (Managed Agents API) from Paseo.",
   "requirements": {
     "paseo": ">=0.15.3"

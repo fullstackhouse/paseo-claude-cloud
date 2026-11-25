@@ -6,7 +6,7 @@ import { z } from "zod";
  * daemon host, readable by anyone allowed to manage it, like a key in config.json.
  */
 export const managedAgentsSettings = defineSettings({
-  id: "managed-agents",
+  id: "claude-cloud",
   scope: "host",
   version: 1,
   schema: z.object({
@@ -17,4 +17,4 @@ export const managedAgentsSettings = defineSettings({
   }),
 });
 
-export const SETTINGS_SCREEN_ID = "managed-agents";
+export const SETTINGS_SCREEN_ID = "claude-cloud";

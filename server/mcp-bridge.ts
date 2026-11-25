@@ -39,7 +39,7 @@ export async function createMcpBridge(
   for (const [server, config] of Object.entries(servers)) {
     if (SKIPPED_SERVERS.has(server) || config.type === "sse") continue;
     try {
-      const client = new Client({ name: "paseo-managed-agents", version: "0.0.0" });
+      const client = new Client({ name: "paseo-claude-cloud", version: "0.0.0" });
       await client.connect(
         config.type === "stdio"
           ? new StdioClientTransport({

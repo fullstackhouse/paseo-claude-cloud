@@ -37,7 +37,7 @@ starting commit (\`git -C ${REPO_MOUNT} add -A && git -C ${REPO_MOUNT} diff --ca
 /mnt/session/outputs/${PATCH_FILE}, then call the ${SYNC_TOOL} tool. Do this whenever you finish a change.`;
 
 const MISSING_KEY =
-  "Needs an Anthropic API key: Settings → Plugins → Claude Managed Agents, or ANTHROPIC_API_KEY in the daemon environment.";
+  "Needs an Anthropic API key: Settings → Providers → Claude (cloud) → Configure, or ANTHROPIC_API_KEY in the daemon environment.";
 
 /** The key from the plugin's settings screen wins; the daemon environment is the fallback. */
 async function resolveApiKey(
@@ -61,9 +61,9 @@ export function createManagedAgentsProvider(deps: Deps): RegistrationWithSetting
   return {
     // Paseo shows a Configure button on this provider's Settings → Providers row.
     settingsScreen: SETTINGS_SCREEN_ID,
-    id: "managed-agents",
+    id: "claude-cloud",
     label: "Claude (cloud)",
-    description: "Claude Managed Agents: runs in Anthropic's cloud sandbox, billed at API rates",
+    description: "Claude Managed Agents API: runs in Anthropic's cloud sandbox, billed at API rates",
     icon: "icon.svg",
     async status() {
       return (await resolveApiKey(deps.settings, {}))
@@ -262,7 +262,7 @@ async function ensureResources(client: Anthropic, settings: PluginSettingsHandle
   if (!environmentId) {
     environmentId = (
       await client.beta.environments.create({
-        name: "paseo-managed-agents",
+        name: "paseo-claude-cloud",
         config: { type: "cloud", networking: { type: "limited", allow_package_managers: true, allow_mcp_servers: false } },
       })
     ).id;

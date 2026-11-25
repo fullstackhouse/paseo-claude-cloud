@@ -1,4 +1,4 @@
-# Claude Managed Agents for Paseo
+# Claude (cloud) for Paseo
 
 Adds a **Claude (cloud)** provider. Each agent runs in an Anthropic-hosted sandbox through the
 [Managed Agents API](https://platform.claude.com/docs/en/managed-agents), so it uses none of your machine's CPU.
@@ -6,7 +6,7 @@ Adds a **Claude (cloud)** provider. Each agent runs in an Anthropic-hosted sandb
 - **Billing:** API rates plus session runtime, not your Claude subscription. Every session has a hard
   dollar budget (default $2), set on the plugin's settings screen.
 - **Setup:** paste an Anthropic API key and set the per-session spend cap in
-  **Settings → Plugins → Claude Managed Agents** (or set `ANTHROPIC_API_KEY` in the daemon environment). The workspace must be a GitHub
+  **Settings → Providers → Claude (cloud) → Configure** (or Settings → Plugins → Claude (cloud)) (or set `ANTHROPIC_API_KEY` in the daemon environment). The workspace must be a GitHub
   repository whose branch is pushed; the sandbox clones it with your `gh` token
   (or `MANAGED_AGENTS_GITHUB_TOKEN`).
 - **Changes come back as a patch:** the agent writes `changes.patch` and calls

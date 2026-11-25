@@ -10,7 +10,7 @@ export interface ResourceState {
 
 function stateFile(): string {
   const home = process.env.PASEO_HOME ?? join(homedir(), ".paseo");
-  return join(home, "plugin-data", "paseo-managed-agents", "state.json");
+  return join(home, "plugin-data", "paseo-claude-cloud", "state.json");
 }
 
 export async function readState(): Promise<ResourceState> {
