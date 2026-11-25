@@ -36,6 +36,19 @@ You cannot push to GitHub. To hand your changes back, write the full diff of the
 starting commit (\`git -C ${REPO_MOUNT} add -A && git -C ${REPO_MOUNT} diff --cached HEAD\`) to
 /mnt/session/outputs/${PATCH_FILE}, then call the ${SYNC_TOOL} tool. Do this whenever you finish a change.`;
 
+const MISSING_KEY =
+  "Needs an Anthropic API key: Settings → Plugins → Claude Managed Agents, or ANTHROPIC_API_KEY in the daemon environment.";
+
+/** The key from the plugin's settings screen wins; the daemon environment is the fallback. */
+async function resolveApiKey(
+  settings: PluginSettingsHandle,
+  env: Readonly<Record<string, string>>,
+): Promise<string | undefined> {
+  const current = await settings.read();
+  const fromSettings = current.status === "ready" ? current.values.apiKey.trim() : "";
+  return fromSettings || env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || undefined;
+}
+
 interface Deps {
   settings: PluginSettingsHandle;
   log: (message: string) => void;
@@ -47,6 +60,11 @@ export function createManagedAgentsProvider(deps: Deps): ProviderRegistration {
     label: "Claude (cloud)",
     description: "Claude Managed Agents: runs in Anthropic's cloud sandbox, billed at API rates",
     icon: "icon.svg",
+    async status() {
+      return (await resolveApiKey(deps.settings, {}))
+        ? { available: true }
+        : { available: false, diagnostic: MISSING_KEY };
+    },
     async connect(request) {
       if (!request.versions.includes(1)) throw new Error("Provider protocol version 1 is required");
       return createConnection(negotiateProviderCapabilities(request.capabilities, CAPABILITIES), deps);
@@ -145,8 +163,8 @@ async function openSession(
   deps: Deps,
 ): Promise<ManagedSession> {
   const { config } = input;
-  const apiKey = config.env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("Set ANTHROPIC_API_KEY in the daemon environment to use Claude (cloud).");
+  const apiKey = await resolveApiKey(deps.settings, config.env);
+  if (!apiKey) throw new Error(MISSING_KEY);
   const client = new Anthropic({ apiKey });
   const bridge = await createMcpBridge(config.mcpServers, { cwd: config.cwd, env: config.env }, deps.log);
   const model = config.model ?? DEFAULT_MODEL;
