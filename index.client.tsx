@@ -6,7 +6,7 @@ export default function contribute(client: PluginClientContext) {
   const remove = client.addSettingsScreen({
     id: SETTINGS_SCREEN_ID,
     title: "Claude (cloud)",
-    icon: "cloud",
+    icon: "Cloud",
     Component: ManagedAgentsSettingsScreen,
   });
   return () => remove();
