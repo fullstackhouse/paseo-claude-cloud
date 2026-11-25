@@ -10,7 +10,7 @@ import {
   type ProviderSessionConfig,
 } from "@getpaseo/plugin/server/provider";
 import type { PluginSettings } from "@getpaseo/plugin/server";
-import type { managedAgentsSettings } from "../shared/settings.js";
+import { SETTINGS_SCREEN_ID, type managedAgentsSettings } from "../shared/settings.js";
 import { readState, writeState } from "./state.js";
 
 type PluginSettingsHandle = PluginSettings<(typeof managedAgentsSettings)["schema"]>;
@@ -54,8 +54,13 @@ interface Deps {
   log: (message: string) => void;
 }
 
-export function createManagedAgentsProvider(deps: Deps): ProviderRegistration {
+/** `settingsScreen` arrives in a newer plugin SDK; older hosts ignore it. */
+type RegistrationWithSettings = ProviderRegistration & { settingsScreen?: string };
+
+export function createManagedAgentsProvider(deps: Deps): RegistrationWithSettings {
   return {
+    // Paseo shows a Configure button on this provider's Settings → Providers row.
+    settingsScreen: SETTINGS_SCREEN_ID,
     id: "managed-agents",
     label: "Claude (cloud)",
     description: "Claude Managed Agents: runs in Anthropic's cloud sandbox, billed at API rates",
