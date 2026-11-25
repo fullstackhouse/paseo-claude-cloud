@@ -1,5 +1,9 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import type { ProviderEvent } from "@getpaseo/plugin/server/provider";
+import type {
+  ProviderEvent,
+  ProviderPermissionResponse,
+  ProviderSessionConfig,
+} from "@getpaseo/plugin/server/provider";
 import { describe, expect, it } from "vitest";
 import type { McpBridge } from "./mcp-bridge.js";
 import { ManagedSession } from "./session.js";
@@ -34,6 +38,10 @@ function fakeClient(script: Array<Record<string, unknown>>) {
 function fakeBridge(calls: Array<{ name: string; input: unknown }>): McpBridge {
   return {
     tools: [],
+    identity(name) {
+      const [server, tool] = name.split("__");
+      return server && tool ? { server, tool } : null;
+    },
     async call(name, input) {
       calls.push({ name, input });
       return { text: "A1 created", isError: false };
@@ -42,7 +50,13 @@ function fakeBridge(calls: Array<{ name: string; input: unknown }>): McpBridge {
   };
 }
 
-async function run(script: Array<Record<string, unknown>>) {
+interface RunOptions {
+  toolPolicy?: ProviderSessionConfig["toolPolicy"];
+  /** Answers every permission request Paseo would show. */
+  answer?: (permissionId: string) => ProviderPermissionResponse;
+}
+
+async function run(script: Array<Record<string, unknown>>, options: RunOptions = {}) {
   const events: ProviderEvent[] = [];
   const bridgeCalls: Array<{ name: string; input: unknown }> = [];
   const { client, sent, done } = fakeClient(script);
@@ -50,9 +64,15 @@ async function run(script: Array<Record<string, unknown>>) {
     client,
     "paseo-1",
     "sesn_1",
-    { cwd: "/tmp", env: {}, mcpServers: {}, settings: {}, persist: true },
+    { cwd: "/tmp", env: {}, mcpServers: {}, settings: {}, persist: true, toolPolicy: options.toolPolicy },
     fakeBridge(bridgeCalls),
-    (event) => events.push(event),
+    (event) => {
+      events.push(event);
+      if (event.type === "session.permission" && options.answer) {
+        const response = options.answer(event.request.id);
+        queueMicrotask(() => void session.respondToPermission(event.request.id, response));
+      }
+    },
     () => {},
   );
   await session.prompt({
@@ -108,16 +128,43 @@ describe("ManagedSession", () => {
     expect(events.some((event) => event.type === "session.turn" && event.state !== "started")).toBe(false);
   });
 
-  it("runs bridged host tools locally and returns their result", async () => {
-    const { sent, bridgeCalls } = await run([
-      { type: "agent.custom_tool_use", id: "c1", name: "asks__ask_create", input: { kind: "question", title: "Ship it?" } },
-    ]);
+  it("runs a host tool the tool policy preapproves without asking", async () => {
+    const { events, sent, bridgeCalls } = await run(
+      [{ type: "agent.custom_tool_use", id: "c1", name: "asks__ask_create", input: { kind: "question", title: "Ship it?" } }],
+      { toolPolicy: { preapproved: [{ kind: "mcp", server: "asks", tool: "ask_create" }] } },
+    );
+    expect(events.some((event) => event.type === "session.permission")).toBe(false);
     expect(bridgeCalls).toEqual([{ name: "asks__ask_create", input: { kind: "question", title: "Ship it?" } }]);
     expect(sent.at(-1)).toMatchObject({
       type: "user.custom_tool_result",
       custom_tool_use_id: "c1",
       content: [{ type: "text", text: "A1 created" }],
       is_error: false,
+    });
+  });
+
+  it("asks before running a host tool the tool policy does not preapprove", async () => {
+    const allowed = await run(
+      [{ type: "agent.custom_tool_use", id: "c1", name: "status__status_set", input: { state: "done" } }],
+      { toolPolicy: { preapproved: [{ kind: "mcp", server: "asks", tool: "ask_create" }] }, answer: () => ({ behavior: "allow" }) },
+    );
+    expect(allowed.events.find((event) => event.type === "session.permission")).toMatchObject({
+      request: { id: "c1", name: "status__status_set", kind: "tool" },
+    });
+    expect(allowed.bridgeCalls).toEqual([{ name: "status__status_set", input: { state: "done" } }]);
+    // The approval is local: nothing is sent to the cloud session but the tool result.
+    expect(allowed.sent.some((event) => event.type === "user.tool_confirmation")).toBe(false);
+
+    const denied = await run(
+      [{ type: "agent.custom_tool_use", id: "c1", name: "status__status_set", input: { state: "done" } }],
+      { answer: () => ({ behavior: "deny", message: "Not now" }) },
+    );
+    expect(denied.bridgeCalls).toEqual([]);
+    expect(denied.sent.at(-1)).toMatchObject({
+      type: "user.custom_tool_result",
+      custom_tool_use_id: "c1",
+      content: [{ type: "text", text: "Not now" }],
+      is_error: true,
     });
   });
 

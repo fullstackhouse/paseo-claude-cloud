@@ -25,6 +25,8 @@ export interface BridgedTool {
 export interface McpBridge {
   tools: BridgedTool[];
   call(name: string, input: Record<string, unknown>): Promise<{ text: string; isError: boolean }>;
+  /** The host MCP server and tool behind a bridged tool name. */
+  identity(name: string): { server: string; tool: string } | null;
   close(): Promise<void>;
 }
 
@@ -74,6 +76,10 @@ export async function createMcpBridge(
 
   return {
     tools,
+    identity(name) {
+      const tool = tools.find((candidate) => candidate.name === name);
+      return tool ? { server: tool.server, tool: tool.tool } : null;
+    },
     async call(name, input) {
       const tool = tools.find((candidate) => candidate.name === name);
       const client = tool && clients.get(tool.server);

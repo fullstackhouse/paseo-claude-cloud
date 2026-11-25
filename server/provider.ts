@@ -18,7 +18,14 @@ import { createMcpBridge, type BridgedTool } from "./mcp-bridge.js";
 import { readGitHubToken, readRepo } from "./repo.js";
 import { ManagedSession, PATCH_FILE, REPO_MOUNT, SYNC_TOOL } from "./session.js";
 
-const CAPABILITIES = ["prompt.message", "prompt.steer", "session.persistence", "permission"] as const;
+const CAPABILITIES = [
+  "prompt.message",
+  "prompt.steer",
+  "session.persistence",
+  "permission",
+  // Preapproved host MCP tools run without a prompt; see ManagedSession.approveCustomTool.
+  "permission.tool_policy",
+] as const;
 
 const MODELS = [
   { id: "claude-opus-5-5", label: "Claude Opus 5.5" },

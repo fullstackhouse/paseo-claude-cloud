@@ -30,6 +30,8 @@ export class ManagedSession {
   private readonly seen = new Set<string>();
   private readonly toolCalls = new Map<string, ToolCallState>();
   private readonly previews = new Map<string, string>();
+  /** Approvals Paseo asks for on our behalf: host tools the tool policy does not preapprove. */
+  private readonly localPermissions = new Map<string, (response: ProviderPermissionResponse) => void>();
   private activeTurnId: string | null = null;
   private turnCounter = 0;
   private interruptRequested = false;
@@ -114,6 +116,14 @@ export class ManagedSession {
   }
 
   async respondToPermission(toolUseId: string, response: ProviderPermissionResponse): Promise<void> {
+    const local = this.localPermissions.get(toolUseId);
+    if (local) {
+      this.localPermissions.delete(toolUseId);
+      local(response);
+      this.emit({ type: "session.permission_resolved", sessionId: this.paseoSessionId, permissionId: toolUseId });
+      if (response.behavior === "deny" && response.interrupt) await this.interrupt();
+      return;
+    }
     await this.send([
       response.behavior === "allow"
         ? { type: "user.tool_confirmation", tool_use_id: toolUseId, result: "allow" }
@@ -244,7 +254,10 @@ export class ManagedSession {
         }
         return;
       case "agent.custom_tool_use":
-        await this.runCustomTool(event.id, event.name, event.input as Record<string, unknown>);
+        // Not awaited: an approval prompt must not hold up the event stream.
+        void this.runCustomTool(event.id, event.name, event.input as Record<string, unknown>).catch((error) =>
+          this.log(`custom tool ${event.name} failed: ${errorMessage(error)}`),
+        );
         return;
       case "session.usage":
         this.emit({
@@ -311,7 +324,13 @@ export class ManagedSession {
   }
 
   private async runCustomTool(id: string, name: string, input: Record<string, unknown>): Promise<void> {
-    const result = name === SYNC_TOOL ? await this.syncChanges() : await this.bridge.call(name, input);
+    const denial = await this.approveCustomTool(id, name, input);
+    const result =
+      denial !== null
+        ? { text: denial, isError: true }
+        : name === SYNC_TOOL
+          ? await this.syncChanges()
+          : await this.bridge.call(name, input);
     await this.send([
       {
         type: "user.custom_tool_result",
@@ -320,6 +339,44 @@ export class ManagedSession {
         is_error: result.isError,
       },
     ]);
+  }
+
+  /**
+   * Host MCP tools run without a prompt only when Paseo's tool policy preapproves that exact
+   * server and tool; anything else asks the user in Paseo. Returns a denial message, or null.
+   * The sync tool writes only into this agent's own worktree, so it asks only in Ask mode.
+   */
+  private async approveCustomTool(
+    id: string,
+    name: string,
+    input: Record<string, unknown>,
+  ): Promise<string | null> {
+    if (name === SYNC_TOOL) {
+      if (this.config.mode !== "ask") return null;
+    } else {
+      const identity = this.bridge.identity(name);
+      if (!identity) return `Unknown tool: ${name}`;
+      const preapproved = this.config.toolPolicy?.preapproved.some(
+        (entry) => entry.kind === "mcp" && entry.server === identity.server && entry.tool === identity.tool,
+      );
+      if (preapproved) return null;
+    }
+    const response = await new Promise<ProviderPermissionResponse>((resolve) => {
+      this.localPermissions.set(id, resolve);
+      this.emit({
+        type: "session.permission",
+        sessionId: this.paseoSessionId,
+        request: {
+          id,
+          name,
+          kind: "tool",
+          title: `Allow the cloud agent to run ${name} on this machine?`,
+          input: input as Record<string, never>,
+          detail: toolDetail(name, input, null),
+        },
+      });
+    });
+    return response.behavior === "allow" ? null : (response.message ?? "The user denied this tool call.");
   }
 
   /** Downloads the patch the agent wrote to its outputs and applies it to the local worktree. */
