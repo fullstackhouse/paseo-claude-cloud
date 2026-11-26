@@ -18,5 +18,7 @@ Adds a **Claude (cloud)** provider. Each agent runs in an Anthropic-hosted sandb
 - **Host tools:** your Paseo MCP servers (asks, status, PRs, …) are offered to the cloud agent as
   custom tools that run in your daemon. Tools your host pre-approves run without asking; others ask
   first. The daemon must be running for those calls to complete.
+- **Debugging:** the context window popover (the ring by the composer) shows the agent's Anthropic
+  session ID with Copy and a link to its page in the Claude Console, where the full event log is.
 - **Modes:** Auto (Anthropic's classifier approves safe calls, unclear ones ask you) or Ask (every
   sandbox and GitHub tool call asks you).

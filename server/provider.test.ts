@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createManagedAgentsProvider } from "./provider.js";
+import { consoleSessionUrl, createManagedAgentsProvider } from "./provider.js";
 
 describe("Claude (cloud) provider", () => {
   it("accepts Paseo's tool policy so agents created by the host can start", async () => {
@@ -14,5 +14,11 @@ describe("Claude (cloud) provider", () => {
     });
     expect(connection.capabilities).toContain("permission.tool_policy");
     await connection.close();
+  });
+
+  it("links a session to its page in the Claude Console", () => {
+    expect(consoleSessionUrl("sesn_017tU1gFAaQjSGZ7t5UZZEka")).toBe(
+      "https://platform.claude.com/workspaces/default/sessions/sesn_017tU1gFAaQjSGZ7t5UZZEka",
+    );
   });
 });
