@@ -29,8 +29,8 @@ const CAPABILITIES = [
 ] as const;
 
 const MODELS = [
-  { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
-  { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+  { id: "claude-opus-5-5", label: "Opus 5.5" },
+  { id: "claude-sonnet-5-5", label: "Sonnet 5.5" },
 ];
 const MODES = [
   { id: "auto", label: "Auto", description: "Anthropic's classifier approves safe tool calls; unclear ones ask you" },
