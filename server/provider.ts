@@ -29,8 +29,8 @@ const CAPABILITIES = [
 ] as const;
 
 const MODELS = [
-  { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
-  { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+  { id: "claude-opus-5-5", label: "Opus 5.5" },
+  { id: "claude-sonnet-5-5", label: "Sonnet 5.5" },
 ];
 const MODES = [
   { id: "auto", label: "Auto", description: "Anthropic's classifier approves safe tool calls; unclear ones ask you" },
@@ -187,12 +187,16 @@ async function openSession(
   const mode = config.mode ?? DEFAULT_MODE;
 
   let managedSessionId = persistedSessionId(input.persistence);
-  if (!managedSessionId) {
+  let opened: { session: Anthropic.Beta.Sessions.BetaManagedAgentsSession; workspaceId: string | null };
+  if (managedSessionId) {
+    const { data, workspace_id } = await client.beta.sessions.retrieve(managedSessionId).withResponse();
+    opened = { session: data, workspaceId: workspace_id ?? null };
+  } else {
     const { agentId, environmentId, budgetUsd, vaultId } = await ensureResources(client, deps.settings, config.env);
     const repo = await readRepo(config.cwd);
     const github = vaultId !== null;
-    managedSessionId = (
-      await client.beta.sessions.create({
+    const { data, workspace_id } = await client.beta.sessions
+      .create({
         agent: {
           type: "agent_with_overrides",
           id: agentId,
@@ -216,13 +220,17 @@ async function openSession(
         ],
         metadata: { paseo_session_id: input.sessionId },
       })
-    ).id;
+      .withResponse();
+    managedSessionId = data.id;
+    opened = { session: data, workspaceId: workspace_id ?? null };
   }
 
   const session = new ManagedSession(client, input.sessionId, managedSessionId, config, bridge, emit, deps.log);
+  const spent = opened.session.usage.list_cost?.amount;
+  if (spent) session.noteSpend(Number(spent));
   const persistence: ProviderPersistence = { version: 1, data: { managedSessionId } };
   // externalSession is newer than the published SDK types; older hosts strip it.
-  const opened = {
+  const openedEvent = {
     type: "session.opened" as const,
     requestId: input.requestId,
     sessionId: input.sessionId,
@@ -231,9 +239,9 @@ async function openSession(
     persistence,
     title: config.title,
     cwd: config.cwd,
-    externalSession: { id: managedSessionId, url: consoleSessionUrl(managedSessionId) },
+    externalSession: { id: managedSessionId, url: consoleSessionUrl(managedSessionId, opened.workspaceId) },
   };
-  emit(opened);
+  emit(openedEvent);
   emit({ type: "session.config", sessionId: input.sessionId, config: configState(model, mode) });
   if (input.persistence && input.history === "replay") await session.replay();
   else await session.skipHistory();
@@ -242,8 +250,10 @@ async function openSession(
   return session;
 }
 
-export function consoleSessionUrl(managedSessionId: string): string {
-  return `https://platform.claude.com/workspaces/default/sessions/${encodeURIComponent(managedSessionId)}`;
+/** The session's Console page. The API names the key's workspace in a response header; "default" is the default workspace. */
+export function consoleSessionUrl(managedSessionId: string, workspaceId: string | null): string {
+  const workspace = encodeURIComponent(workspaceId ?? "default");
+  return `https://platform.claude.com/workspaces/${workspace}/sessions/${encodeURIComponent(managedSessionId)}`;
 }
 
 export function sessionTools(mode: string, bridged: BridgedTool[], github = false) {

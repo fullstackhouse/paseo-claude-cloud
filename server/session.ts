@@ -51,6 +51,11 @@ export class ManagedSession {
     private readonly log: (message: string) => void,
   ) {}
 
+  /** Seeds the spend the session reported before this process attached, in cents. */
+  noteSpend(cents: number): void {
+    this.spentCents = cents;
+  }
+
   /** Replays stored events into the timeline without acting on them. */
   async replay(): Promise<void> {
     for await (const event of this.client.beta.sessions.events.list(this.managedSessionId)) {
@@ -98,12 +103,17 @@ export class ManagedSession {
     // Claim the turn before sending: the session.status_running this triggers is not a resume.
     this.activeTurnId = turnId;
     this.interruptRequested = false;
+    const message = { type: "user.message" as const, content: [{ type: "text" as const, text }] };
+    let overBudget = false;
     try {
-      await this.send([{ type: "user.message", content: [{ type: "text", text }] }]);
+      await this.send([message]);
     } catch (error) {
-      this.activeTurnId = null;
-      this.promptFailed(prompt, errorMessage(error));
-      return;
+      if (!isBudgetRejection(error)) {
+        this.activeTurnId = null;
+        this.promptFailed(prompt, errorMessage(error));
+        return;
+      }
+      overBudget = true;
     }
     this.emit({
       type: "session.prompt_result",
@@ -112,6 +122,8 @@ export class ManagedSession {
       result: { type: "turn", turnId },
     });
     this.emit({ type: "session.turn", sessionId: this.paseoSessionId, turnId, state: "started" });
+    // A session paused at its cap takes no messages; ask for a higher cap, then deliver this one.
+    if (overBudget) this.offerBudgetRaise(`prompt-${turnId}`, () => this.send([message]));
   }
 
   async interrupt(): Promise<void> {
@@ -123,8 +135,9 @@ export class ManagedSession {
     const local = this.localPermissions.get(toolUseId);
     if (local) {
       this.localPermissions.delete(toolUseId);
-      local(response);
+      // Resolve the card before the handler can end the turn.
       this.emit({ type: "session.permission_resolved", sessionId: this.paseoSessionId, permissionId: toolUseId });
+      local(response);
       if (response.behavior === "deny" && response.interrupt) await this.interrupt();
       return;
     }
@@ -318,7 +331,7 @@ export class ManagedSession {
             description: `The cloud agent paused after spending ${formatUsd(this.spentCents)}. Raise its cap to let it continue.`,
           },
         });
-        this.finishTurn("failed", "Session budget reached");
+        // The turn stays open on the card: failing it first would let Paseo dismiss the card with the turn.
         this.offerBudgetRaise(eventId);
         return;
       default:
@@ -327,29 +340,37 @@ export class ManagedSession {
   }
 
   /**
-   * Asks the user, through Paseo's permission card, how far to raise this session's cap. Raising it
-   * resumes the paused session; status_running then opens a new turn.
+   * Asks the user, through Paseo's permission card, how far to raise this session's cap, while the
+   * turn stays open. Raising it resumes the paused session (or runs `afterRaise`, for a message the
+   * session refused); leaving it paused fails the turn.
    */
-  private offerBudgetRaise(eventId: string): void {
+  private offerBudgetRaise(eventId: string, afterRaise?: () => Promise<void>): void {
     const id = `budget:${eventId}`;
     const caps = BUDGET_RAISE_STEPS_USD.map((usd) => usd * 100).filter((cents) => cents > this.spentCents + 50);
     this.localPermissions.set(id, (response) => {
-      if (response.behavior !== "allow") return;
       // A plain allow (no action picked, e.g. `paseo permit allow`) takes the first, smallest cap.
-      const cents = response.selectedActionId?.startsWith("raise:")
-        ? Number(response.selectedActionId.slice("raise:".length))
-        : caps[0];
-      if (cents === undefined || !Number.isFinite(cents)) return;
+      const cents =
+        response.behavior !== "allow"
+          ? undefined
+          : response.selectedActionId?.startsWith("raise:")
+            ? Number(response.selectedActionId.slice("raise:".length))
+            : caps[0];
+      if (cents === undefined || !Number.isFinite(cents)) {
+        this.finishTurn("failed", "Session budget reached");
+        return;
+      }
       void this.client.beta.sessions
         .update(this.managedSessionId, {
           budget: { type: "limit", max_list_cost: { amount: String(cents), currency: "USD" } },
         })
+        .then(() => afterRaise?.())
         .catch((error) => {
           this.emitItem({
             type: "error",
             id: `budget-raise:${eventId}`,
             message: `Raising the cap failed: ${errorMessage(error)}`,
           });
+          this.finishTurn("failed", "Session budget reached");
         });
     });
     this.emit({
@@ -537,6 +558,11 @@ function toolDetail(name: string, input: Record<string, unknown>, output: string
 }
 
 const BUDGET_RAISE_STEPS_USD = [5, 10, 20, 50];
+
+/** The API's 400 for a message sent to a session paused at its spend cap. */
+function isBudgetRejection(error: unknown): boolean {
+  return /session budget reached/i.test(errorMessage(error));
+}
 
 function formatUsd(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
