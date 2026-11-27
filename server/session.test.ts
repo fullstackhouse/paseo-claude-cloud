@@ -9,7 +9,8 @@ import type { McpBridge } from "./mcp-bridge.js";
 import { ManagedSession } from "./session.js";
 
 /** A stand-in for the Managed Agents API: a scripted event stream plus a log of sent events. */
-function fakeClient(script: Array<Record<string, unknown>>) {
+function fakeClient(script: Array<Record<string, unknown>>, rejectFirstMessage?: string) {
+  let rejection = rejectFirstMessage;
   const sent: Array<Record<string, unknown>> = [];
   const updates: Array<Record<string, unknown>> = [];
   let release: () => void = () => {};
@@ -31,6 +32,11 @@ function fakeClient(script: Array<Record<string, unknown>>) {
             })();
           },
           async send(_id: string, body: { events: Array<Record<string, unknown>> }) {
+            if (rejection && body.events[0]?.type === "user.message") {
+              const message = rejection;
+              rejection = undefined;
+              throw new Error(message);
+            }
             sent.push(...body.events);
           },
         },
@@ -59,12 +65,14 @@ interface RunOptions {
   toolPolicy?: ProviderSessionConfig["toolPolicy"];
   /** Answers every permission request Paseo would show. */
   answer?: (permissionId: string) => ProviderPermissionResponse;
+  /** The API refuses the prompt's message with this error. */
+  rejectFirstMessage?: string;
 }
 
 async function run(script: Array<Record<string, unknown>>, options: RunOptions = {}) {
   const events: ProviderEvent[] = [];
   const bridgeCalls: Array<{ name: string; input: unknown }> = [];
-  const { client, sent, updates, done } = fakeClient(script);
+  const { client, sent, updates, done } = fakeClient(script, options.rejectFirstMessage);
   const session = new ManagedSession(
     client,
     "paseo-1",
@@ -173,7 +181,7 @@ describe("ManagedSession", () => {
     });
   });
 
-  it("fails the turn at the budget cap and offers caps above what was spent", async () => {
+  it("keeps the turn open on the cap card and offers caps above what was spent", async () => {
     const { events, updates } = await run([
       { type: "session.usage", id: "u1", usage: { list_cost: { amount: "612", currency: "USD" } } },
       { type: "session.status_idle", id: "e1", stop_reason: { type: "budget_reached" } },
@@ -181,7 +189,7 @@ describe("ManagedSession", () => {
     expect(events.find((event) => event.type === "session.notice")).toMatchObject({
       notice: { title: "Session budget reached" },
     });
-    expect(events.filter((event) => event.type === "session.turn").at(-1)).toMatchObject({ state: "failed" });
+    expect(events.filter((event) => event.type === "session.turn").map((event) => event.state)).toEqual(["started"]);
     const permission = events.find((event) => event.type === "session.permission");
     expect(permission).toMatchObject({ request: { id: "budget:e1", kind: "other" } });
     const actions = permission?.type === "session.permission" ? permission.request.actions : [];
@@ -203,14 +211,20 @@ describe("ManagedSession", () => {
     expect(updates).toEqual([{ budget: { type: "limit", max_list_cost: { amount: "500", currency: "USD" } } }]);
   });
 
-  it("leaves the session paused when the user declines", async () => {
-    const { updates } = await run([{ type: "session.status_idle", id: "e1", stop_reason: { type: "budget_reached" } }], {
+  it("leaves the session paused and fails the turn when the user declines", async () => {
+    const { events, updates } = await run([{ type: "session.status_idle", id: "e1", stop_reason: { type: "budget_reached" } }], {
       answer: () => ({ behavior: "deny", selectedActionId: "keep-paused" }),
     });
     expect(updates).toEqual([]);
+    const tail = events.filter((event) => event.type === "session.permission_resolved" || event.type === "session.turn");
+    expect(tail.map((event) => (event.type === "session.turn" ? event.state : event.type))).toEqual([
+      "started",
+      "session.permission_resolved",
+      "failed",
+    ]);
   });
 
-  it("opens a new turn when a paused session resumes, and completes it", async () => {
+  it("continues the same turn when a raised cap resumes the session", async () => {
     const { events } = await run([
       { type: "session.status_idle", id: "e1", stop_reason: { type: "budget_reached" } },
       { type: "session.status_running", id: "e2" },
@@ -220,10 +234,28 @@ describe("ManagedSession", () => {
     const turns = events.flatMap((event) => (event.type === "session.turn" ? [[event.turnId.split("-")[0], event.state]] : []));
     expect(turns).toEqual([
       ["turn", "started"],
-      ["turn", "failed"],
-      ["resume", "started"],
-      ["resume", "completed"],
+      ["turn", "completed"],
     ]);
+  });
+
+  it("offers the cap when a paused session refuses a message, then delivers it", async () => {
+    const { events, sent, updates } = await run([], {
+      rejectFirstMessage:
+        '400 {"type":"error","error":{"type":"invalid_request_error","message":"session budget reached: consumed list cost has met `budget.max_list_cost`"}}',
+      answer: () => ({ behavior: "allow", selectedActionId: "raise:1000" }),
+    });
+    expect(events.find((event) => event.type === "session.permission")).toMatchObject({ request: { kind: "other" } });
+    expect(events.find((event) => event.type === "session.prompt_result")).toMatchObject({ result: { type: "turn" } });
+    expect(updates).toEqual([{ budget: { type: "limit", max_list_cost: { amount: "1000", currency: "USD" } } }]);
+    expect(sent).toEqual([{ type: "user.message", content: [{ type: "text", text: "fix the bug" }] }]);
+  });
+
+  it("fails the prompt on any other refused message", async () => {
+    const { events } = await run([], { rejectFirstMessage: "500 overloaded" });
+    expect(events.find((event) => event.type === "session.prompt_result")).toMatchObject({
+      result: { type: "failed", error: { message: "500 overloaded" } },
+    });
+    expect(events.some((event) => event.type === "session.permission")).toBe(false);
   });
 
   it("does not mistake its own prompt's status_running for a resume", async () => {

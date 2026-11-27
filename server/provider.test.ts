@@ -16,9 +16,13 @@ describe("Claude (cloud) provider", () => {
     await connection.close();
   });
 
-  it("links a session to its page in the Claude Console", () => {
-    expect(consoleSessionUrl("sesn_017tU1gFAaQjSGZ7t5UZZEka")).toBe(
-      "https://platform.claude.com/workspaces/default/sessions/sesn_017tU1gFAaQjSGZ7t5UZZEka",
+  it("links a session to its page in its Claude Console workspace", () => {
+    expect(consoleSessionUrl("sesn_017tU1gFAaQjSGZ7t5UZZEka", "wrkspc_011CZkZaBF1tNoB5wlCeusgy")).toBe(
+      "https://platform.claude.com/workspaces/wrkspc_011CZkZaBF1tNoB5wlCeusgy/sessions/sesn_017tU1gFAaQjSGZ7t5UZZEka",
     );
+  });
+
+  it("falls back to the default workspace when the API names none", () => {
+    expect(consoleSessionUrl("sesn_1", null)).toBe("https://platform.claude.com/workspaces/default/sessions/sesn_1");
   });
 });
