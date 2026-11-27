@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { consoleSessionUrl, createManagedAgentsProvider } from "./provider.js";
+import { consoleSessionUrl, createManagedAgentsProvider, environmentConfig } from "./provider.js";
 
 describe("Claude (cloud) provider", () => {
   it("accepts Paseo's tool policy so agents created by the host can start", async () => {
     const settings = {
-      read: async () => ({ status: "ready" as const, revision: "1", values: { apiKey: "", githubToken: "", sessionBudgetUsd: 2 } }),
+      read: async () => ({ status: "ready" as const, revision: "1", values: { apiKey: "", githubToken: "", sessionBudgetUsd: 10, allowedHosts: [] } }),
       subscribe: () => () => {},
     };
     const provider = createManagedAgentsProvider({ settings, log: () => {} });
@@ -24,5 +24,15 @@ describe("Claude (cloud) provider", () => {
 
   it("falls back to the default workspace when the API names none", () => {
     expect(consoleSessionUrl("sesn_1", null)).toBe("https://platform.claude.com/workspaces/default/sessions/sesn_1");
+  });
+
+  it("lets the sandbox reach yarn, GitHub for gh, and the user's extra hosts", () => {
+    const config = environmentConfig([" *.casteo.dev ", "", "repo.yarnpkg.com"]);
+    expect(config.networking).toMatchObject({ allow_package_managers: true, allow_mcp_servers: true });
+    expect(config.networking.allowed_hosts).toEqual(
+      expect.arrayContaining(["repo.yarnpkg.com", "api.github.com", "*.casteo.dev"]),
+    );
+    expect(config.networking.allowed_hosts.filter((h) => h === "repo.yarnpkg.com")).toHaveLength(1);
+    expect(config.packages.apt).toContain("gh");
   });
 });

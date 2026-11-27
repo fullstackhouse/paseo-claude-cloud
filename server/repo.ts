@@ -6,8 +6,10 @@ const run = promisify(execFile);
 export interface RepoInfo {
   url: string;
   branch: string;
-  /** The sandbox clones this exact commit, so the patch it hands back applies to the local worktree. */
+  /** The commit the sandbox clones. */
   sha: string;
+  /** The local HEAD. Differs from `sha` when the local branch is behind GitHub. */
+  localSha: string;
 }
 
 /**
@@ -27,7 +29,29 @@ export async function readRepo(cwd: string): Promise<RepoInfo> {
       `Commit ${sha.slice(0, 9)} on "${branch}" is not on GitHub yet. Push it first: the cloud agent clones from GitHub.`,
     );
   }
-  return { url: `https://github.com/${match[1]}`, branch, sha };
+  return { url: `https://github.com/${match[1]}`, branch, sha: await freshBase(cwd, branch, sha), localSha: sha };
+}
+
+/**
+ * A local branch that is only behind GitHub (no commits of its own) would start the agent on stale
+ * code, so the sandbox clones the remote tip instead: `origin/<branch>`, else the default branch.
+ */
+async function freshBase(cwd: string, branch: string, sha: string): Promise<string> {
+  const defaultRef = (await git(cwd, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]).catch(() => "")).trim();
+  for (const ref of [`refs/remotes/origin/${branch}`, defaultRef]) {
+    if (!ref) continue;
+    const tip = (await git(cwd, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).catch(() => "")).trim();
+    if (!tip) continue;
+    if (tip === sha) return sha;
+    const behind = await git(cwd, ["merge-base", "--is-ancestor", sha, tip]).then(() => true, () => false);
+    if (behind) return tip;
+  }
+  return sha;
+}
+
+/** The current local HEAD, to check a patch from the sandbox still fits the worktree. */
+export async function localHead(cwd: string): Promise<string> {
+  return (await git(cwd, ["rev-parse", "HEAD"])).trim();
 }
 
 /** Token used only for the clone. Anthropic keeps it outside the sandbox. */

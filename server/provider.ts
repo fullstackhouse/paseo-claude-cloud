@@ -11,7 +11,8 @@ import {
 } from "@getpaseo/plugin/server/provider";
 import type { PluginSettings } from "@getpaseo/plugin/server";
 import { SETTINGS_SCREEN_ID, type managedAgentsSettings } from "../shared/settings.js";
-import { GITHUB_MCP_SERVER, GITHUB_SYSTEM, ensureGitHubVault } from "./github.js";
+import { GITHUB_HOSTS, GITHUB_MCP_SERVER, GITHUB_SYSTEM, ensureGitHubVault } from "./github.js";
+import { createHash } from "node:crypto";
 import { readState, writeState } from "./state.js";
 
 type PluginSettingsHandle = PluginSettings<(typeof managedAgentsSettings)["schema"]>;
@@ -187,6 +188,7 @@ async function openSession(
   const mode = config.mode ?? DEFAULT_MODE;
 
   let managedSessionId = persistedSessionId(input.persistence);
+  let baseSha = persistedBaseSha(input.persistence);
   let opened: { session: Anthropic.Beta.Sessions.BetaManagedAgentsSession; workspaceId: string | null };
   if (managedSessionId) {
     const { data, workspace_id } = await client.beta.sessions.retrieve(managedSessionId).withResponse();
@@ -194,6 +196,7 @@ async function openSession(
   } else {
     const { agentId, environmentId, budgetUsd, vaultId } = await ensureResources(client, deps.settings, config.env);
     const repo = await readRepo(config.cwd);
+    baseSha = repo.sha;
     const github = vaultId !== null;
     const { data, workspace_id } = await client.beta.sessions
       .create({
@@ -222,13 +225,16 @@ async function openSession(
       })
       .withResponse();
     managedSessionId = data.id;
+    if (repo.sha !== repo.localSha) {
+      deps.log(`Local ${repo.branch} is behind GitHub; the sandbox starts from ${repo.sha.slice(0, 9)}`);
+    }
     opened = { session: data, workspaceId: workspace_id ?? null };
   }
 
-  const session = new ManagedSession(client, input.sessionId, managedSessionId, config, bridge, emit, deps.log);
+  const session = new ManagedSession(client, input.sessionId, managedSessionId, config, bridge, emit, deps.log, baseSha);
   const spent = opened.session.usage.list_cost?.amount;
   if (spent) session.noteSpend(Number(spent));
-  const persistence: ProviderPersistence = { version: 1, data: { managedSessionId } };
+  const persistence: ProviderPersistence = { version: 1, data: { managedSessionId, ...(baseSha ? { baseSha } : {}) } };
   // externalSession is newer than the published SDK types; older hosts strip it.
   const openedEvent = {
     type: "session.opened" as const,
@@ -299,23 +305,21 @@ async function ensureResources(
   env: Readonly<Record<string, string>>,
 ) {
   const current = await settings.read();
-  const budgetUsd = current.status === "ready" ? current.values.sessionBudgetUsd : 2;
+  const budgetUsd = current.status === "ready" ? current.values.sessionBudgetUsd : 10;
+  const extraHosts = current.status === "ready" ? current.values.allowedHosts : [];
   const fromSettings = current.status === "ready" ? current.values.githubToken.trim() : "";
   const githubToken = fromSettings || (await readGitHubToken(env).catch(() => ""));
   const initial = await readState();
   let state = initial;
   let { agentId, environmentId } = state;
-  const networking = { type: "limited" as const, allow_package_managers: true, allow_mcp_servers: true };
+  const config = environmentConfig(extraHosts);
+  const configFingerprint = createHash("sha256").update(JSON.stringify(config)).digest("hex");
   if (!environmentId) {
-    environmentId = (
-      await client.beta.environments.create({ name: "paseo-claude-cloud", config: { type: "cloud", networking } })
-    ).id;
-    state = { ...state, environmentAllowsMcp: true };
-  } else if (githubToken && !state.environmentAllowsMcp) {
-    // Environments created before GitHub support blocked MCP traffic.
-    await client.beta.environments.update(environmentId, { config: { type: "cloud", networking } });
-    state = { ...state, environmentAllowsMcp: true };
+    environmentId = (await client.beta.environments.create({ name: "paseo-claude-cloud", config })).id;
+  } else if (configFingerprint !== state.environmentConfigFingerprint) {
+    await client.beta.environments.update(environmentId, { config });
   }
+  state = { ...state, environmentAllowsMcp: true, environmentConfigFingerprint: configFingerprint };
   if (githubToken) state = await ensureGitHubVault(client, githubToken, state);
   if (!agentId) {
     agentId = (
@@ -341,6 +345,25 @@ function persistedSessionId(persistence: ProviderPersistence | undefined): strin
     return data.managedSessionId;
   }
   return null;
+}
+
+function persistedBaseSha(persistence: ProviderPersistence | undefined): string | null {
+  const data = persistence?.data;
+  if (data && typeof data === "object" && !Array.isArray(data) && typeof data.baseSha === "string") return data.baseSha;
+  return null;
+}
+
+/** Yarn Berry downloads itself from repo.yarnpkg.com, which "package managers" does not cover. */
+const BUILTIN_HOSTS = ["repo.yarnpkg.com"];
+
+/** The sandbox's network and packages: registries, MCP servers, GitHub for `gh`, and the user's hosts. */
+export function environmentConfig(extraHosts: readonly string[]) {
+  const allowed_hosts = [...new Set([...BUILTIN_HOSTS, ...GITHUB_HOSTS, ...extraHosts.map((h) => h.trim()).filter(Boolean)])];
+  return {
+    type: "cloud" as const,
+    networking: { type: "limited" as const, allow_package_managers: true, allow_mcp_servers: true, allowed_hosts },
+    packages: { type: "packages" as const, apt: ["gh"] },
+  };
 }
 
 function stripSchemaMeta(schema: Record<string, unknown>) {
