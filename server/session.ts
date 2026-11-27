@@ -439,11 +439,14 @@ export class ManagedSession {
     name: string,
     input: Record<string, unknown>,
   ): Promise<string | null> {
+    let requestName = name;
     if (name === SYNC_TOOL) {
       if (this.config.mode !== "ask") return null;
     } else {
       const identity = this.bridge.identity(name);
       if (!identity) return `Unknown tool: ${name}`;
+      // Claude's name for an MCP tool, which plugins' permission hooks (asks, status, prs) answer.
+      requestName = `mcp__${identity.server}__${identity.tool}`;
       const preapproved = this.config.toolPolicy?.preapproved.some(
         (entry) => entry.kind === "mcp" && entry.server === identity.server && entry.tool === identity.tool,
       );
@@ -456,9 +459,9 @@ export class ManagedSession {
         sessionId: this.paseoSessionId,
         request: {
           id,
-          name,
+          name: requestName,
           kind: "tool",
-          title: `Allow the cloud agent to run ${name} on this machine?`,
+          title: `Allow the cloud agent to run ${requestName} on this machine?`,
           input: input as Record<string, never>,
           detail: toolDetail(name, input, null),
         },
