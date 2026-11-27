@@ -18,7 +18,12 @@ export const managedAgentsSettings = defineSettings({
      */
     githubToken: z.string().default(""),
     /** Hard spend cap per session, in USD, enforced by the Managed Agents API. */
-    sessionBudgetUsd: z.number().positive().default(2),
+    sessionBudgetUsd: z.number().positive().default(10),
+    /**
+     * Extra hosts the sandbox may reach, beyond package registries and GitHub, e.g. `*.example.dev`
+     * for PR previews. Bare hostnames or `*.` wildcards.
+     */
+    allowedHosts: z.array(z.string()).default([]),
   }),
 });
 

@@ -14,7 +14,11 @@ export interface ResourceState {
   /** Vault holding the GitHub credential, and a fingerprint of the token stored in it. */
   vaultId: string | null;
   githubCredentialId: string | null;
+  /** GH_TOKEN environment-variable credential for `gh` in the sandbox. */
+  ghTokenCredentialId: string | null;
   githubTokenFingerprint: string | null;
+  /** Fingerprint of the environment config last applied, so changes reach existing environments. */
+  environmentConfigFingerprint: string | null;
 }
 
 const EMPTY: ResourceState = {
@@ -23,7 +27,9 @@ const EMPTY: ResourceState = {
   environmentAllowsMcp: false,
   vaultId: null,
   githubCredentialId: null,
+  ghTokenCredentialId: null,
   githubTokenFingerprint: null,
+  environmentConfigFingerprint: null,
 };
 
 function stateFile(): string {

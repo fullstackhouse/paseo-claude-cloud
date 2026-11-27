@@ -16,6 +16,7 @@ export function ManagedAgentsSettingsScreen() {
   const keyInput = useRef<SettingsInputHandle>(null);
   const githubInput = useRef<SettingsInputHandle>(null);
   const budgetInput = useRef<SettingsInputHandle>(null);
+  const hostsInput = useRef<SettingsInputHandle>(null);
   const [error, setError] = useState<string | null>(null);
 
   if (settings.status === "loading") return <Text>Loading…</Text>;
@@ -28,13 +29,15 @@ export function ManagedAgentsSettingsScreen() {
     const key = keyInput.current?.getText().trim() ?? values.apiKey;
     const githubToken = githubInput.current?.getText().trim() ?? values.githubToken;
     const budgetText = budgetInput.current?.getText().trim() ?? String(values.sessionBudgetUsd);
+    const hostsText = hostsInput.current?.getText() ?? values.allowedHosts.join(", ");
+    const allowedHosts = hostsText.split(/[\s,]+/).filter(Boolean);
     const budget = Number(budgetText);
     if (!Number.isFinite(budget) || budget <= 0) {
-      setError("Enter a spend cap above $0, e.g. 2 or 5.50.");
+      setError("Enter a spend cap above $0, e.g. 10 or 5.50.");
       return;
     }
     setError(null);
-    await settings.save({ ...values, apiKey: key, githubToken, sessionBudgetUsd: budget }, revision);
+    await settings.save({ ...values, apiKey: key, githubToken, sessionBudgetUsd: budget, allowedHosts }, revision);
   }
 
   return (
@@ -59,7 +62,7 @@ export function ManagedAgentsSettingsScreen() {
           hint={
             values.githubToken
               ? "Saved. Cloud agents open PRs with this token."
-              : "Empty: cloud agents open PRs with your gh login. Paste a fine-grained token to limit them to certain repositories. Kept in an Anthropic vault; the sandbox never sees it."
+              : "Empty: cloud agents use your gh login. Paste a fine-grained token (Contents, Pull requests: write; Actions: read) to limit them to certain repositories. Kept in an Anthropic vault and swapped in on GitHub API calls; the sandbox never sees it."
           }
           placeholder="github_pat_…"
           initialValue={values.githubToken}
@@ -73,6 +76,14 @@ export function ManagedAgentsSettingsScreen() {
           initialValue={String(values.sessionBudgetUsd)}
           onChangeText={() => {}}
           error={error ?? undefined}
+        />
+        <SettingsInput
+          ref={hostsInput}
+          label="Extra hosts the sandbox may reach"
+          hint="Comma-separated, e.g. *.preview.example.com for PR previews. Package registries, repo.yarnpkg.com and GitHub are always allowed."
+          placeholder="*.example.dev"
+          initialValue={values.allowedHosts.join(", ")}
+          onChangeText={() => {}}
         />
         <SettingsAction
           label={settings.saveError ? `Save failed: ${String(settings.saveError)}` : "Save changes"}

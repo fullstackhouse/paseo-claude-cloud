@@ -7,7 +7,7 @@ import type {
   ProviderToolCallDetail,
 } from "@getpaseo/plugin/server/provider";
 import type { McpBridge } from "./mcp-bridge.js";
-import { applyPatch } from "./repo.js";
+import { applyPatch, localHead } from "./repo.js";
 
 type StreamEvent = Anthropic.Beta.Sessions.BetaManagedAgentsStreamSessionEvents;
 type SessionEvent = Anthropic.Beta.Sessions.BetaManagedAgentsSessionEvent;
@@ -49,6 +49,8 @@ export class ManagedSession {
     private readonly bridge: McpBridge,
     private readonly emit: (event: ProviderEvent) => void,
     private readonly log: (message: string) => void,
+    /** The commit the sandbox cloned; null for sessions opened before it was recorded. */
+    private readonly baseSha: string | null = null,
   ) {}
 
   /** Seeds the spend the session reported before this process attached, in cents. */
@@ -471,6 +473,16 @@ export class ManagedSession {
       const patch = await this.downloadPatch();
       if (patch === null) {
         return { text: `No ${PATCH_FILE} found in /mnt/session/outputs. Write it first.`, isError: true };
+      }
+      // A patch against another commit would leave conflict markers in the user's worktree.
+      const head = await localHead(this.config.cwd);
+      if (this.baseSha && head !== this.baseSha && !this.appliedPatch) {
+        return {
+          text:
+            `Not copied: the local worktree is on ${head.slice(0, 9)} but you started from ${this.baseSha.slice(0, 9)}. ` +
+            "Push your branch instead; the user can check it out from GitHub.",
+          isError: false,
+        };
       }
       // Each patch is the full diff against the starting commit, so undo the previous one first.
       if (this.appliedPatch) await applyPatch(this.config.cwd, this.appliedPatch, { reverse: true });
