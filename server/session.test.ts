@@ -162,7 +162,8 @@ describe("ManagedSession", () => {
       { toolPolicy: { preapproved: [{ kind: "mcp", server: "asks", tool: "ask_create" }] }, answer: () => ({ behavior: "allow" }) },
     );
     expect(allowed.events.find((event) => event.type === "session.permission")).toMatchObject({
-      request: { id: "c1", name: "status__status_set", kind: "tool" },
+      // Claude's MCP tool name, so plugins' permission hooks recognize their own tools.
+      request: { id: "c1", name: "mcp__status__status_set", kind: "tool" },
     });
     expect(allowed.bridgeCalls).toEqual([{ name: "status__status_set", input: { state: "done" } }]);
     // The approval is local: nothing is sent to the cloud session but the tool result.
